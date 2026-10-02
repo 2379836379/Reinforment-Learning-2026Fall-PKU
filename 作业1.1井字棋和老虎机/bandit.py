@@ -1,52 +1,99 @@
+"""Epsilon-greedy experiments for the normal-distribution bandit."""
+
+import argparse
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
-from random import random, randint
-from time import sleep
-from matplotlib import pyplot as plt
+
 
 class NormalDistBandit:
     def __init__(self, means, stds):
-        assert len(means) == len(stds), "Means and stds must be the same length."
+        if len(means) != len(stds):
+            raise ValueError("Means and stds must be the same length.")
         self.n = len(means)
-        self.means = np.array(means)
-        self.stds = np.array(stds)
-        assert all(self.stds >= 0), "Stds must be positive."
-    
+        self.means = np.asarray(means, dtype=float)
+        self.stds = np.asarray(stds, dtype=float)
+        if np.any(self.stds < 0):
+            raise ValueError("Stds must be non-negative.")
+
     def pull(self, k):
-        assert 0 <= k < self.n, f"Invalid arm {k}."
+        if not 0 <= k < self.n:
+            raise ValueError(f"Invalid arm {k}.")
         return np.random.normal(loc=self.means[k], scale=self.stds[k])
 
+
 def epsilon_greedy(values, epsilon):
-    assert len(values) > 1, "There should be 2 or more values."
-    eps = epsilon * len(values) / (len(values) - 1)
-    if random() <= eps:
-        return randint(0, len(values)-1)
-    return int(np.argmax(values))
-   
-        
-if __name__ == "__main__":
-    n = 5
-    bandit = NormalDistBandit(means = np.array(range(-n, n+1)), stds = np.ones(11))
-    
-    # Task：把下面这几种epsilon的曲线画到一张图中，分析你所观察到的结果。
-    epsilons = [0.01, 0.05, 0.1, 0.2]
-    
-    # 以下绘制epsilon=0.01的曲线图
-    iter = 10000
-    eps = 0.01
-    
-    x = np.array(range(iter))
-    y = np.zeros(iter, dtype=np.float64)
-    
-    values = np.zeros(n*2+1, dtype=np.float64)
-    counts = np.zeros(n*2+1, dtype=np.int64)
-    for i in range(1, iter):
-        action = epsilon_greedy(values, eps)
+    """Choose a greedy arm with probability 1-epsilon.
+
+    Exploration is sampled from the non-greedy arms, so epsilon is exactly
+    the probability of exploring rather than an approximate probability that
+    also occasionally re-selects the greedy arm.
+    """
+    values = np.asarray(values)
+    if values.ndim != 1 or len(values) < 2:
+        raise ValueError("There should be 2 or more values.")
+    if not 0.0 <= epsilon <= 1.0:
+        raise ValueError("epsilon must be in [0, 1].")
+
+    greedy = int(np.argmax(values))
+    if np.random.random() >= epsilon:
+        return greedy
+    alternatives = np.delete(np.arange(len(values)), greedy)
+    return int(np.random.choice(alternatives))
+
+
+def run_experiment(bandit, epsilon, iterations):
+    """Return the running average reward for one independent experiment."""
+    values = np.zeros(bandit.n, dtype=float)
+    counts = np.zeros(bandit.n, dtype=np.int64)
+    average_reward = np.zeros(iterations, dtype=float)
+    total = 0.0
+
+    for i in range(iterations):
+        action = epsilon_greedy(values, epsilon)
         counts[action] += 1
-        value = bandit.pull(action)
-        values[action] = (values[action] * (counts[action] - 1) + value) / counts[action]
-        y[i] = (y[i-1] * (i-1) + value) / i
-    plt.figure()
-    plt.plot(x, y)
-    plt.xlabel('Iterations')
-    plt.ylabel('Average reward')
-    plt.show()
+        reward = bandit.pull(action)
+        values[action] += (reward - values[action]) / counts[action]
+        total += reward
+        average_reward[i] = total / (i + 1)
+    return average_reward
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Plot epsilon-greedy bandit curves.")
+    parser.add_argument("--iterations", type=int, default=10000)
+    parser.add_argument("--output", default="bandit_epsilon_comparison.png")
+    parser.add_argument("--seed", type=int, default=20261002)
+    args = parser.parse_args()
+    if args.iterations <= 0:
+        parser.error("--iterations must be positive")
+
+    n = 5
+    epsilons = [0.01, 0.05, 0.1, 0.2]
+    bandit = NormalDistBandit(means=np.arange(-n, n + 1), stds=np.ones(2 * n + 1))
+    x = np.arange(args.iterations)
+
+    plt.figure(figsize=(8, 5))
+    for epsilon in epsilons:
+        # Reset the stream so curves differ mainly because of epsilon.
+        np.random.seed(args.seed)
+        rewards = run_experiment(bandit, epsilon, args.iterations)
+        plt.plot(x, rewards, label=f"epsilon={epsilon:g}")
+
+    plt.axhline(np.max(bandit.means), color="black", linestyle="--",
+                linewidth=1, label="best arm mean")
+    plt.xlabel("Iterations")
+    plt.ylabel("Average reward")
+    plt.title("Epsilon-greedy bandit comparison")
+    plt.legend()
+    plt.grid(alpha=0.25)
+    plt.tight_layout()
+    plt.savefig(args.output, dpi=160)
+    print(f"Saved plot to {args.output}")
+
+
+if __name__ == "__main__":
+    main()

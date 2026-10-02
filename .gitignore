@@ -1,2 +1,4 @@
 *.zip
 __MACOSX
+tictactoe
+__pycache__

@@ -110,6 +110,12 @@ bool TicTacToe::step_back(){
 }
 bool TicTacToe::step(TicTacToe::Action action){
     int x = action.x, y = action.y;
+    if (state.test_win() || state.full()){
+        if (verbose){
+            std::cout << "Error: Game is already over!" << std::endl;
+        }
+        return false;
+    }
     if (not action.valid()){
         if (verbose){
             std::cout << "Error: Action (" << x << "," << y << ") out of range!" << std::endl;
@@ -226,7 +232,7 @@ std::vector<TicTacToe::Action> TicTacToe::State::action_space() const {
     std::vector<TicTacToe::Action> actions;
     for (int y = 0; y < 3; ++ y){
         for (int x = 0; x < 3; ++ x){
-            Action action(y, x);
+            Action action(x, y);
             if (unoccupied(action)){
                 actions.push_back(action);
             }
@@ -238,7 +244,7 @@ std::vector<TicTacToe::Action> TicTacToe::State::action_space() const {
 void TicTacToe::State::print() const {
     for (int y = 0; y < 3; ++ y){
         for (int x = 0; x < 3; ++ x){
-            std::cout << "\t" << TicTacToe::PLAYER_NAME[get_piece(TicTacToe::Action(y, x))];
+            std::cout << "\t" << TicTacToe::PLAYER_NAME[get_piece(TicTacToe::Action(x, y))];
         }
         std::cout << std::endl;
     }
