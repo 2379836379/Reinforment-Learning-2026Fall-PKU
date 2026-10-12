@@ -55,9 +55,7 @@ class JackCarRental{
         }
 
         Transition step(int action){
-            int low = max(-min(MOVE_LIMIT, car_2), -car_2);
-            int high = min(MOVE_LIMIT, car_1);
-            if (action < low || action > high){
+            if (!action_valid(car_1, car_2, action)){
                 throw invalid_argument("move action is infeasible for current state");
             }
 
@@ -88,8 +86,8 @@ class JackCarRental{
         }
 
         int sample_action(){
-            int low = -min(MOVE_LIMIT, car_2);
-            int high = min(MOVE_LIMIT, car_1);
+            int low = max(-MOVE_LIMIT, max(-car_2, car_1 - MAX_CAR));
+            int high = min(MOVE_LIMIT, min(car_1, MAX_CAR - car_2));
             uniform_int_distribution<int> distribution(low, high);
             return distribution(engine);
         }
@@ -97,6 +95,12 @@ class JackCarRental{
         static bool valid_state(int first, int second){
             return first >= 0 && first <= MAX_CAR &&
                    second >= 0 && second <= MAX_CAR;
+        }
+
+        // Positive action moves cars from location A to location B.
+        static bool action_valid(int first, int second, int action){
+            return action >= -MOVE_LIMIT && action <= MOVE_LIMIT &&
+                   valid_state(first - action, second + action);
         }
 
     private:
@@ -174,17 +178,14 @@ LocationModel build_location_model(double request_mean, double return_mean){
 }
 
 bool action_valid(int car_1, int car_2, int action){
-    return action >= -min(JackCarRental::MOVE_LIMIT, car_2) &&
-           action <= min(JackCarRental::MOVE_LIMIT, car_1);
+    return JackCarRental::action_valid(car_1, car_2, action);
 }
 
 double action_value(const Grid& values, int car_1, int car_2, int action,
                     const LocationModel& location_1,
                     const LocationModel& location_2){
-    // Moving into a full lot is capped at the capacity, matching the
-    // environment transition and keeping every successor in [0, 20].
-    int available_1 = min(JackCarRental::MAX_CAR, car_1 - action);
-    int available_2 = min(JackCarRental::MAX_CAR, car_2 + action);
+    int available_1 = car_1 - action;
+    int available_2 = car_2 + action;
     double expected_future = 0.0;
 
     for (int next_1 = 0; next_1 < N; ++next_1){
@@ -277,9 +278,9 @@ Policy solve_policy_iteration(){
 
 int main(){
     Policy policy = solve_policy_iteration();
-    cout << "Optimal policy (rows: cars at A, columns: cars at B)" << endl;
+    cout << "Optimal policy (rows: cars at A, 20 to 0; columns: cars at B, 0 to 20)" << endl;
     cout << "Positive action: A -> B; negative action: B -> A" << endl;
-    for (int car_1 = 0; car_1 < N; ++car_1){
+    for (int car_1 = N - 1; car_1 >= 0; --car_1){
         for (int car_2 = 0; car_2 < N; ++car_2){
             cout << setw(4) << policy[car_1][car_2];
         }
