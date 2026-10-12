@@ -34,18 +34,73 @@ class BlackjackPolicyLearnableDefault : public BlackjackPolicyBase{
             }
         }
         void update_policy(){
-            // TODO
-
-            // simply take argmax
+            // Policy improvement: choose the action with the largest
+            // estimated action value.  Sums below 11 and sum 21 are not part
+            // of the book's state space and retain their obvious actions.
+            for (int dealer_shown = 1; dealer_shown <= 10; ++ dealer_shown){
+                for (int player_ace = 0; player_ace <= 1; ++ player_ace){
+                    for (int player_sum = 11; player_sum <= 20; ++ player_sum){
+                        policy[dealer_shown][player_ace][player_sum] =
+                            value[dealer_shown][player_ace][player_sum][Blackjack::HIT]
+                                > value[dealer_shown][player_ace][player_sum][Blackjack::STICK]
+                            ? Blackjack::HIT : Blackjack::STICK;
+                    }
+                    policy[dealer_shown][player_ace][21] = Blackjack::STICK;
+                }
+            }
         }
         // n iterations for each start (initial state and first action), no need to modify.
         void update_value(Blackjack& env, int n=10000){
-            // TODO
+            set_value_initial();
 
-            // REMEMBER to call set_value_initial() at the beginning
-            // simulate from every possible initial state:(dealer_shown, player_ace, player_sum) \
-                (call Blackjack::reset(,,) to do this) and player's every possible first action
-            // BE AWARE only use player's steps (rather than dealer's) to update value estimation. 
+            // Exploring starts: evaluate both possible first actions from
+            // every state represented in Sutton's blackjack example.  Later
+            // player actions follow the current policy; dealer actions are
+            // handled by BlackjackPolicyLearnableDefault::operator().
+            for (int dealer_shown = 1; dealer_shown <= 10; ++ dealer_shown){
+                for (int player_ace = 0; player_ace <= 1; ++ player_ace){
+                    for (int player_sum = 11; player_sum <= 20; ++ player_sum){
+                        for (int first_action = Blackjack::HIT;
+                             first_action <= Blackjack::STICK; ++ first_action){
+                            for (int sample = 0; sample < n; ++ sample){
+                                env.reset(dealer_shown, bool(player_ace), player_sum);
+                                episode.clear();
+
+                                Blackjack::State state = env.state();
+                                int action = first_action;
+                                bool done = false;
+                                while (not done){
+                                    state = env.state();
+                                    if (state.turn == Blackjack::PLAYER){
+                                        episode.emplace_back(state, action);
+                                    }
+                                    Blackjack::StepResult result = env.step(action);
+                                    done = result.done;
+                                    if (done){
+                                        // Rewards are zero before termination,
+                                        // so the terminal player reward is the
+                                        // return for every recorded step.
+                                        double reward = result.player_reward;
+                                        for (const EpisodeStep& step : episode){
+                                            int& count = state_action_count[
+                                                step.dealer_shown][step.player_ace]
+                                                [step.player_sum][step.action];
+                                            double& estimate = value[
+                                                step.dealer_shown][step.player_ace]
+                                                [step.player_sum][step.action];
+                                            ++ count;
+                                            estimate += (reward - estimate) / count;
+                                        }
+                                    } else {
+                                        state = env.state();
+                                        action = (*this)(state);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         void print_policy() const {
             cout << setw(10) << "Player Without Ace" << "\t\t" << "Player With Usable Ace." << endl;
@@ -79,6 +134,7 @@ class BlackjackPolicyLearnableDefault : public BlackjackPolicyBase{
         }
         
         BlackjackPolicyLearnableDefault(){
+            set_value_initial();
             for (int dealer_shown = 1; dealer_shown <= 10; ++ dealer_shown){
                 for (int player_ace = 0; player_ace <= 1; ++ player_ace){
                     for (int player_sum = 0; player_sum <= 21; ++ player_sum){
@@ -123,20 +179,12 @@ class BlackjackPolicyLearnableDefault : public BlackjackPolicyBase{
 
 // Demonstrative play of player & dealer with default policy 
 int main(){
-    Blackjack env(true);
-    BlackjackPolicyDefault policy;
-    bool done;
-    while (true) {
-        done = false;    
-        env.reset();
-        while (not done){
-            Blackjack::State state = env.state();
-            int action = policy(state);
-            Blackjack::StepResult result = env.step(action);
-            done = result.done;
-        }
-        cout << endl;
-        this_thread::sleep_for(chrono::milliseconds(1000));
+    Blackjack env;
+    BlackjackPolicyLearnableDefault policy;
+    for (int iteration = 0; iteration < 10; ++ iteration){
+        policy.update_value(env);
+        policy.update_policy();
     }
+    policy.print_policy();
     return 0;
 }

@@ -17,3 +17,6 @@ Blackjack
 提示：
   1. 答案参见书上P100 Figure 5.2 π*
   2. 见blackjack_main.cpp中注释
+
+作业要求：
+代码+报告（pdf）中需要包含结果截图，以及算法大致描述

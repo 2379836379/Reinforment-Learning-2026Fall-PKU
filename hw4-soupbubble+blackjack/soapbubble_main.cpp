@@ -14,8 +14,8 @@ class SoapBubble{
         SoapBubble(int max_x, int max_y, 
             const vector<int> &x_lower, const vector<int> &x_upper, 
             const vector<int> &y_lower, const vector<int> &y_upper,
-            const Bubble &bubble){
-            SoapBubble(max_x, max_y, x_lower, x_upper, y_lower, y_upper);
+            const Bubble &bubble)
+            : SoapBubble(max_x, max_y, x_lower, x_upper, y_lower, y_upper){
             set_bubble(bubble);
         }
         SoapBubble(int max_x, int max_y,
@@ -39,6 +39,9 @@ class SoapBubble{
             }
         }
         bool inside_bubble(int x, int y) const {
+            if (x < 0 or x >= max_x or y < 0 or y >= max_y){
+                return false;
+            }
             return x_lower[y] <= x and x <= x_upper[y]
                 and y_lower[x] <= y and y <= y_upper[x];
         }
@@ -83,7 +86,48 @@ class SoapBubble{
         }
 
         void inner_heights_mc(int iter=500000){  
-            // TODO
+            if (iter <= 0){
+                return;
+            }
+
+            // The discrete Laplace equation says that an interior value is
+            // the expected boundary value reached by a random walk.  Sample
+            // that walk independently for every interior point.
+            for (int y = 0; y < max_y; ++ y){
+                for (int x = 0; x < max_x; ++ x){
+                    if (not inside_bubble(x, y) or at_border(x, y)){
+                        continue;
+                    }
+
+                    double total = 0.0;
+                    for (int sample = 0; sample < iter; ++ sample){
+                        int walk_x = x;
+                        int walk_y = y;
+                        while (not at_border(walk_x, walk_y)){
+                            int neighbor_x[DIR_NUM];
+                            int neighbor_y[DIR_NUM];
+                            int neighbor_count = 0;
+                            for (int d = 0; d < DIR_NUM; ++ d){
+                                int new_x = walk_x + DX[d];
+                                int new_y = walk_y + DY[d];
+                                if (inside_bubble(new_x, new_y)){
+                                    neighbor_x[neighbor_count] = new_x;
+                                    neighbor_y[neighbor_count] = new_y;
+                                    ++ neighbor_count;
+                                }
+                            }
+
+                            // Every non-border point in a valid bubble has at
+                            // least one in-bubble neighbor.
+                            int choice = rand() % neighbor_count;
+                            walk_x = neighbor_x[choice];
+                            walk_y = neighbor_y[choice];
+                        }
+                        total += bubble[walk_y][walk_x];
+                    }
+                    bubble[y][x] = total / iter;
+                }
+            }
         }
     private:
         static const int DIR_NUM = 4;
@@ -100,13 +144,13 @@ SoapBubble default_bubble_generator(int max_x=10, int max_y=10){
     vector<int> x_lower, x_upper, y_lower, y_upper;
     for (int y = 0, lower, upper; y < max_y; ++ y){
         lower = y >> 2;
-        upper = max_y - 1 - ((max_y - y) >> 2);
+        upper = max_x - 1 - ((max_y - y) >> 2);
         x_lower.push_back(lower);
         x_upper.push_back(upper);
     }
     for (int x = 0, lower, upper; x < max_x; ++ x){
         lower = x >> 2;
-        upper = max_x - 1 - ((max_x - x) >> 2);
+        upper = max_y - 1 - ((max_x - x) >> 2);
         y_lower.push_back(lower);
         y_upper.push_back(upper);
     }
