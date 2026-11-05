@@ -20,7 +20,7 @@ class MazeEnv{
         typedef pair<int, int> State;
         typedef struct {State next_state; double reward; bool done;} StepResult;
         
-        MazeEnv(void* m, 
+        MazeEnv(const void* m,
             int m_x, int m_y, 
             int s_x, int s_y, 
             int g_x, int g_y, 
@@ -58,6 +58,21 @@ class MazeEnv{
             return state.first >= 0 and state.first < max_x
                 and state.second >= 0 and state.second < max_y
                 and maze[locate(state.first, state.second)] == EMPTY;
+        }
+
+        bool is_wall(const State& state) const {
+            assert(state.first >= 0 and state.first < max_x);
+            assert(state.second >= 0 and state.second < max_y);
+            return maze[locate(state.first, state.second)] == WALL;
+        }
+
+        // The blocking and shortcut experiments change the maze while learning.
+        void set_wall(const State& state, bool wall) {
+            assert(state.first >= 0 and state.first < max_x);
+            assert(state.second >= 0 and state.second < max_y);
+            assert(not is_start_state(state));
+            assert(not is_goal_state(state));
+            maze[locate(state.first, state.second)] = wall ? WALL : EMPTY;
         }
 
         inline bool is_goal_state(const State& state) const {
