@@ -76,10 +76,10 @@ class NStepSarsaLearner:
         self.env = env
         self.n_step = n_step
         self.gamma = 0.99
-        self.learning_rate = 0.20
-        self.epsilon_start = 1.0
-        self.epsilon_end = 0.05
-        self.epsilon_decay_episodes = 800
+        self.learning_rate = 0.05
+        self.epsilon_start = 0.5
+        self.epsilon_end = 0.01
+        self.epsilon_decay_episodes = 1500
         self.rng = np.random.default_rng(seed)
         self.q = np.zeros(env.observation_shape + (env.action_space.n,), dtype=np.float64)
 
@@ -181,10 +181,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Compare n-step SARSA on discretized CartPole.")
     parser.add_argument("--n-values", type=int, nargs="+", default=[1, 3, 5])
     parser.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
-    parser.add_argument("--episodes", type=int, default=1500)
-    parser.add_argument("--eval-episodes", type=int, default=100)
+    parser.add_argument("--episodes", type=int, default=8000)
+    parser.add_argument("--eval-episodes", type=int, default=500)
     parser.add_argument("--intervals", type=int, default=12)
-    parser.add_argument("--output", type=Path, default=Path("results/nstep_cartpole_results.csv"))
+    parser.add_argument("--output", type=Path, default=Path("results/nstep_cartpole_results_4.csv"))
     args = parser.parse_args()
     if min(args.n_values) < 1 or args.episodes < 1 or args.eval_episodes < 1:
         parser.error("n-values, episodes, and eval-episodes must be positive")
