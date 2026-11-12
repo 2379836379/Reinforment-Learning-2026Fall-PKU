@@ -1,9 +1,3 @@
-"""n-step SARSA on a discretized CartPole environment.
-
-Run ``python3 discrete_cartpole.py --n-values 1 3 5 --seeds 0 1 2`` to
-compare three n values and write per-seed results to a CSV file.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -181,7 +175,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Compare n-step SARSA on discretized CartPole.")
     parser.add_argument("--n-values", type=int, nargs="+", default=[1, 3, 5])
     parser.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
-    parser.add_argument("--episodes", type=int, default=8000)
+    parser.add_argument("--episodes", type=int, default=5000)
     parser.add_argument("--eval-episodes", type=int, default=500)
     parser.add_argument("--intervals", type=int, default=12)
     parser.add_argument("--output", type=Path, default=Path("results/nstep_cartpole_results_4.csv"))
