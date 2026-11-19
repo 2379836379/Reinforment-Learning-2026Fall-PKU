@@ -1,0 +1,25 @@
+[project]
+name = "hw8-dqn"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "2328195213", email = "2328195213@qq.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "gymnasium[atari]>=1.4.0",
+    "jupyter>=1.1.1",
+    "matplotlib>=3.11.2",
+    "notebook>=7.6.5",
+    "numpy>=2.5.4",
+    "torch>=2.10.0",
+    "tqdm>=4.70.1",
+]
+
+[project.scripts]
+hw8-dqn = "hw8_dqn:main"
+
+[build-system]
+requires = ["uv_build>=0.12.12,<0.13.0"]
+build-backend = "uv_build"
