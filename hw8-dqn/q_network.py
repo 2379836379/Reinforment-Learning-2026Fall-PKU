@@ -6,9 +6,11 @@ class QNetwork(nn.Module):
     def __init__(self, input_dim, output_dim, lr):
         super(QNetwork, self).__init__()
         self.seq = nn.Sequential(
-            nn.Linear(input_dim, 64),
+            nn.Linear(input_dim, 128),
             nn.ReLU(),
-            nn.Linear(64, output_dim)
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, output_dim)
         )
         for m in self.modules():
             if isinstance(m, nn.Linear):
