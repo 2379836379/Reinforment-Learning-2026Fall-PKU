@@ -14,7 +14,8 @@ def run_one(config, directory):
     path = Path(directory) / 'result.json'
     if path.exists():
         result = json.loads(path.read_text())
-        if result['config'] != asdict(config):
+        # Older CartPole results predate the optional environment/training fields.
+        if asdict(TrainConfig(**result['config'])) != asdict(config):
             raise ValueError(f'Configuration mismatch: {path}')
         return result
     return train(config, directory)
