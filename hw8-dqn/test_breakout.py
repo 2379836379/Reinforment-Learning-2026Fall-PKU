@@ -29,8 +29,10 @@ class BreakoutIntegrationTests(unittest.TestCase):
         np.testing.assert_array_equal(obs, original)
         self.assertFalse(done)
         for _ in range(11):
-            _, _, done, _ = self.env.step(0)
+            _, _, done, info = self.env.step(0)
         self.assertTrue(done)
+        self.assertTrue(info['truncated'])
+        self.assertFalse(info['terminated'])
         np.testing.assert_array_equal(self.env.reset({'seed': 11}), original)
 
     def test_cnn_single_batch_and_dqn_update(self):

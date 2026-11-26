@@ -136,3 +136,89 @@ uv run python dqn_train.py --env breakout --episodes 2 \
   --output results/breakout_smoke
 uv run python -m unittest test_breakout -v
 ```
+
+## 2026-11-26：Breakout 完整训练分析与算法优化
+
+### 已完成训练的结果
+
+数据来自用户已完成的 `results/breakout_train/result.json`、`returns.npz` 和 `progress.jsonl`。本轮保留这些原始文件，另在 `results/breakout_analysis/` 保存统计、曲线及旧模型重评结果。
+
+| 指标 | 原训练结果 |
+| --- | ---: |
+| 训练种子 / 回合数 | 11 / 1000 |
+| 动作决策步数 / 梯度更新次数 | 185167 / 46042 |
+| 耗时 | 5308.32 秒（约 88.5 分钟） |
+| 全部训练回合均分 / 最高分 | 2.025 / 11 |
+| 最后 100 回合训练均分 | 2.85 |
+| 最后 5 个验证检查点均分 | 2.40 |
+| 最终贪心测试 5 局 | 1、1、1、1、1（均分 1.00） |
+
+每 100 回合的训练均分依次为 `1.21, 1.50, 1.22, 1.38, 2.56, 1.05, 2.73, 2.38, 3.37, 2.85`。验证均分曾在第 100、650、900 回合达到 11，但随后回落；最后一个检查点为 1。因此本次完整运行不能视为已稳定学会 Breakout。
+
+另外，20 个验证检查点中，每个检查点内部的三局得分均完全相同。环境关闭 sticky actions，也没有随机开局，纯贪心策略下只改变 reset seed 不足以保证评估多样性；三局相同分数不能当作三个独立场景的稳健证据。
+
+### 瓶颈判断与调整依据
+
+- 原实现没有目标网络，用同一个在线网络预测当前 Q 值及下一状态最大 Q 值，TD 目标随每次参数更新变化，可能加剧震荡。原日志没有 loss、Q 值、TD 目标或梯度范数，不能据此断言已发生 Q 值发散或已证明过估计是主因。
+- 训练共约 74 万游戏帧（185167 次动作决策 × 最多 4 帧），只是有限的 Atari 交互预算。1000 回合不等于充分训练，且原来仅预热 1000 步就在较窄的经验分布上开始拟合。
+- 仅扩大 CNN 不一定有效。本轮保留卷积编码器，改用 Dueling 价值/优势分支，尝试提高状态价值与动作差异的表达效率；这属于待验证的结构选择。
+- 所有结果来自一个训练种子。以下多项改动是下一轮候选方案，不是已经通过消融实验确认的最优组合。本次用户已允许算法优化，因此实现范围包含 `dqn_agent.py`，不再局限于早先 CartPole 实验的超参数约束。
+
+### 已实现的网络、超参数与算法改动
+
+| 项目 | 原 Breakout 配置 | 新 Breakout 默认配置 |
+| --- | --- | --- |
+| CNN 后的输出头 | 单分支隐藏层 512 | Dueling：价值与优势各一个 256 单元隐藏层 |
+| 网络参数量（4 个动作） | 1260196 | 1259429 |
+| 学习率 | 1e-4 | 5e-5 |
+| 开始更新前收集步数 | 1000 | 10000 |
+| epsilon 从 1.0 降到 0.1 的步数 | 100000 | 250000 |
+| 目标网络 | 无 | 每 1000 次梯度更新硬同步 |
+| 下一状态目标 | 在线网络最大 Q 值 | Double DQN：在线网络选动作，目标网络估值 |
+| TD 损失 | MSE | Huber（smooth L1，阈值 1） |
+| 梯度裁剪 | 无 | 全局 L2 范数上限 10 |
+| 周期验证 / 最终测试局数 | 3 / 5 | 10 / 20 |
+| 评估探索率 | 0 | 0.01 |
+
+卷积层仍为 32/64/64 通道，输入仍是 uint8 四帧堆叠 `(4,80,80)`。Dueling 聚合公式为 `Q(s,a)=V(s)+A(s,a)-mean_a A(s,a)`；两条 256 分支的总参数量接近旧单分支 512，避免把结构变化与大幅扩容混为一谈。
+
+gamma=0.99、经验池 10000、batch size 32、每 4 个决策步更新一次、1000 回合和每 50 回合验证保持原设置。目标网络同步间隔的单位是**梯度更新次数**，默认通常对应更新开始后的 4000 个决策步。延长探索使策略有更多机会遇到有效击球；降低学习率、目标网络、Huber 和裁剪旨在稳定更新，Double DQN 旨在缓解最大化估计偏差，实际效果仍须训练验证。
+
+注意：若新运行仍只有约 185167 个决策步，epsilon 将约为 0.3334，尚未完成新的衰减计划。应结合步数、探索率与验证曲线决定是否增加回合预算，不能仅因跑完 1000 回合就宣称收敛；公平对比还应报告交互步数及多种子结果。
+
+### 训练与评估可靠性
+
+- `QNetwork` 的参数更新方法从非标准的 `train(loss)` 改为 `optimize(loss, max_grad_norm)`，恢复 PyTorch 原生 `train()/eval()` 语义；冻结的目标网络不参与求导，按配置同步。
+- Breakout 在 info 中传出 `terminated/truncated`：两者都会结束当前采样回合，但只有真实终止会屏蔽 TD bootstrap，时间上限截断保留下一状态价值。失去生命仍不作为回合终止，实际 FIRE 动作仍被记录。
+- 评估用每局固定种子的独立随机数生成器，以 1% 概率随机动作，其余为贪心；验证种子 10000–10009，最终测试种子 20000–20019。评估不消耗训练的 NumPy 随机状态。增加局数和动作扰动改善评估覆盖，但不保证每局轨迹或得分都不同。
+- `progress.jsonl` 新增验证区间内每次更新的平均 `loss/q_mean/target_mean/grad_norm`，其中 grad_norm 为裁剪前范数，关闭裁剪时为 null。增加 `best_model.pt`，只按验证均分选择（同分保留较早检查点）；`model.pt` 仍是最后一轮模型，`final_eval_mean` 只对应它。保存文件不是完整训练恢复快照。
+- 新默认输出为 `results/breakout_optimized`；含已有 result 或 progress 的目录会拒绝覆盖，防止误覆盖完整基线。CLI 可独立开关各算法用于消融；CartPole 默认仍使用此前实验参数和原算法开关。
+- 新增 `evaluate_checkpoint.py`，按 checkpoint 配置重建原单分支或新 Dueling 网络，可对新旧权重使用相同评估协议。旧 checkpoint 缺失的新配置字段按关闭算法改进的默认值补齐。
+
+### 本轮实际验证与限制
+
+- 旧完整模型在种子 20000–20019、epsilon=0.01 下重评 20 局：均分 **1.35**，局间总体标准差 **0.7263**，范围 1–4。原来的 1.00 与这里的 1.35 使用不同协议，**这不是模型训练提升**。输出为 `results/breakout_analysis/baseline_eval_eps001.json`，今后的新模型应与相同协议的基线比较。
+- 旧模型另以 epsilon=0、种子 20000–20004 重评，仍为五局各 1 分，与原保存结果一致；输出为 `results/breakout_analysis/baseline_eval_greedy.json`。
+- `test_dqn.py` 与 `test_breakout.py` 共 10 项测试：覆盖 Double DQN 的数值目标、终止掩码、目标网络冻结与同步、Huber 与裁剪、Dueling 两分支更新、评估 RNG 隔离、训练入口的截断 bootstrap，以及真实 ALE 的预处理、发球、时间上限和 CartPole 兼容。
+- 优化版 Breakout 冒烟训练完成 3 回合、360 个决策步、83 次梯度更新；为覆盖目标同步，临时使用同步间隔 10、预热 32、batch 8、经验池 256、每局上限 120。训练均分 0.3333，最终测试 3 局全为 0；诊断数值有限，模型、最佳模型、回报和曲线均保存成功，最佳模型可重新加载评估。输出为 `results/breakout_optimized_smoke/`。
+- CartPole 兼容性训练完成 10 回合、108 步、44 次更新，输出为 `results/cartpole_algorithm_compatibility/`。短测试仅用于验证流程，不能比较策略质量。
+- 本轮没有重新完成 1000 回合的优化版训练，也没有完成多种子算法消融，不能宣称已提高完整训练分数。原始完整训练和新增验证结果应分别报告。
+- 10 项测试均通过；`git diff --check` 通过。README 已同步新默认参数、消融开关、checkpoint 重评与运行方法。
+
+运行优化版完整训练（使用新目录）：
+
+```bash
+MPLCONFIGDIR=/tmp/mpl-cache .venv/bin/python dqn_train.py \
+  --env breakout --seed 11 --output results/breakout_optimized
+```
+
+统一协议重评与回归测试：
+
+```bash
+.venv/bin/python evaluate_checkpoint.py results/breakout_optimized/model.pt \
+  --episodes 20 --seed-start 20000 --epsilon 0.01 \
+  --output results/breakout_analysis/optimized_eval_eps001.json
+.venv/bin/python -m unittest test_dqn test_breakout -v
+```
+
+后续消融建议固定评估协议及训练预算，先比较目标网络，再启用 Double DQN，随后比较单分支 512 与 Dueling 双分支 256，最后分别比较学习率与探索计划。多个改动同时启用的总成绩不能用于识别单项改进贡献；至少用 11、22、33 三个训练种子再判断稳定性。

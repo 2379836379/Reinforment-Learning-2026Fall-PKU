@@ -1,4 +1,5 @@
 from agent import Agent
+from copy import deepcopy
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -16,11 +17,25 @@ class DQNAgent(Agent):
         self.gamma = conf.get('gamma', 0.95)
         # 设备信息，如'cpu', 'cuda:0'等
         self.device = conf.get('device', 'cpu')
+        self.target_update_freq = conf.get('target_update_freq', 0)
+        self.double_dqn = conf.get('double_dqn', False)
+        self.huber_loss = conf.get('huber_loss', False)
+        self.max_grad_norm = conf.get('max_grad_norm', 0.0)
+        self.learn_steps = 0
+        if self.double_dqn and self.target_update_freq <= 0:
+            raise ValueError('Double DQN requires a target network')
     
     # 设置推理和训练使用的模型
     def set_model(self, model):
         self.model = model
         self.model.to(self.device)
+        self.learn_steps = 0
+        self.target_model = None
+        if self.target_update_freq:
+            self.target_model = deepcopy(self.model)
+            self.target_model.optimizer = None
+            self.target_model.requires_grad_(False)
+            self.target_model.eval()
 
     # 输入单帧状态，采样探索性动作
     def predict(self, obs: 'Frame | np.ndarray | dict'):
@@ -57,13 +72,23 @@ class DQNAgent(Agent):
         q_value = torch.gather(q_values, dim = 1, index = samples.action)
         # 计算Q(s', a)
         with torch.no_grad():
-            next_q_values = self.model.inference(samples.next_obs)
-            max_next_q_value = torch.max(next_q_values, dim = 1, keepdim = True)[0]
+            target_model = self.target_model if self.target_model is not None else self.model
+            next_q_values = target_model.inference(samples.next_obs)
+            if self.double_dqn:
+                next_actions = self.model.inference(samples.next_obs).argmax(dim=1, keepdim=True)
+                max_next_q_value = next_q_values.gather(1, next_actions)
+            else:
+                max_next_q_value = next_q_values.max(dim=1, keepdim=True)[0]
         # Q函数更新目标
         q_target = samples.reward + self.gamma * (1 - samples.done) * max_next_q_value
-        loss = F.mse_loss(q_value, q_target)
+        loss = F.smooth_l1_loss(q_value, q_target) if self.huber_loss else F.mse_loss(q_value, q_target)
         # 模型更新
-        self.model.train(loss)
+        grad_norm = self.model.optimize(loss, self.max_grad_norm)
+        self.learn_steps += 1
+        if self.target_model is not None and self.learn_steps % self.target_update_freq == 0:
+            self.target_model.load_state_dict(self.model.state_dict())
+        return dict(loss=loss.item(), q_mean=q_value.detach().mean().item(),
+                    target_mean=q_target.mean().item(), grad_norm=grad_norm)
     
     def sample_process(self, samples: SampleBatchNumpy):
         '''

@@ -63,5 +63,6 @@ class BreakoutEnv(Env):
         self.needs_fire = info['lives'] < self.lives and not (terminated or truncated)
         self.lives = info['lives']
         self.frames.append(self.preprocess_obs(obs))
-        info = dict(info, executed_action=executed_action)
+        info = dict(info, executed_action=executed_action,
+                    terminated=terminated, truncated=truncated)
         return np.stack(self.frames), reward, terminated or truncated, info
