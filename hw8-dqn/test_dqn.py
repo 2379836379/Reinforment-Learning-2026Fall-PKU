@@ -65,6 +65,21 @@ class DQNTests(unittest.TestCase):
         metrics = agent.learn(self.batch(agent))
         self.assertAlmostEqual(metrics['target_mean'], (1 + .5 * 9 + 1) / 2)
 
+    def test_multi_step_double_dqn_uses_each_samples_discount(self):
+        agent = self.make_agent(double_dqn=True)
+        batch = SampleBatchNumpy.stack([
+            FrameNumpy.from_dict(dict(obs=np.array([1., 0.], dtype=np.float32),
+                next_obs=np.array([0., 1.], dtype=np.float32), action=0,
+                reward=reward, done=done, discount=discount))
+            for reward, done, discount in [(2.75, False, .125), (2., False, .25), (2., True, .25)]])
+        agent.sample_process(batch)
+        metrics = agent.learn(batch)
+        # Full horizon, shortened truncation, shortened true termination.
+        targets = np.array([3.125, 2.75, 2.])
+        self.assertAlmostEqual(metrics['target_mean'], targets.mean(), places=6)
+        self.assertAlmostEqual(metrics['loss'], np.mean(targets ** 2), places=6)
+        self.assertTrue(all(p.grad is None for p in agent.target_model.parameters()))
+
     def test_huber_and_gradient_clipping(self):
         agent = self.make_agent(double_dqn=True, huber_loss=True, max_grad_norm=.1)
         metrics = agent.learn(self.batch(agent))
@@ -125,21 +140,30 @@ class DQNTests(unittest.TestCase):
                     terminated=done and self.terminal, truncated=done and not self.terminal)
             def close(self):
                 pass
-        for terminal in (False, True):
-            with self.subTest(terminal=terminal), tempfile.TemporaryDirectory() as output:
-                masks = []
+        for terminal, n_step in ((False, 1), (True, 1), (False, 3), (True, 3)):
+            with self.subTest(terminal=terminal, n_step=n_step), tempfile.TemporaryDirectory() as output:
+                masks, rewards, discounts = [], [], []
                 def learn(agent, batch):
                     masks.extend(batch.done.flatten().tolist())
+                    rewards.extend(batch.reward.flatten().tolist())
+                    discounts.extend(batch.discount.flatten().tolist())
                     return dict(loss=0., q_mean=0., target_mean=0., grad_norm=None)
                 config = TrainConfig(episodes=1, batch_size=2, buffer_size=4,
-                                     eval_episodes=1, final_eval_episodes=1)
+                                     eval_episodes=1, final_eval_episodes=1, n_step=n_step)
                 # Include all transitions in the test update to check the final mask.
                 with patch('dqn_train.make_env', side_effect=lambda c: FakeEnv(terminal)), \
                      patch('dqn_train.random.sample', side_effect=lambda population, k: list(population)), \
                      patch.object(DQNAgent, 'learn', learn):
                     result = train(config, output)
                 self.assertEqual(result['env_steps'], 3)
-                self.assertEqual(masks, [0., 0., float(terminal)])
+                if n_step == 1:
+                    self.assertEqual(masks, [0., 0., float(terminal)])
+                    np.testing.assert_allclose(rewards, [1., 1., 1.])
+                    np.testing.assert_allclose(discounts, [.99, .99, .99])
+                else:
+                    self.assertEqual(masks, [float(terminal)] * 3)
+                    np.testing.assert_allclose(rewards, [2.9701, 1.99, 1.])
+                    np.testing.assert_allclose(discounts, [.99 ** 3, .99 ** 2, .99])
 
 
 if __name__ == '__main__':

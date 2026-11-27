@@ -14,6 +14,7 @@ from dqn_agent import DQNAgent
 from gym_env import GymEnv, BreakoutEnv
 from q_network import QNetwork, BreakoutQNetwork
 from sample import FrameNumpy, SampleBatchNumpy
+from n_step import NStepAccumulator
 
 
 @dataclass
@@ -43,6 +44,7 @@ class TrainConfig:
     huber_loss: bool = False
     max_grad_norm: float = 0.0
     eval_epsilon: float = 0.0
+    n_step: int = 1
 
 
 def default_config(env):
@@ -52,7 +54,8 @@ def default_config(env):
                            train_frequency=4, epsilon_decay_steps=250000,
                            eval_interval=50, eval_episodes=10, final_eval_episodes=20,
                            target_update_freq=1000, double_dqn=True, dueling=True,
-                           huber_loss=True, max_grad_norm=10.0, eval_epsilon=0.01)
+                           huber_loss=True, max_grad_norm=10.0, eval_epsilon=0.01,
+                           n_step=3)
     if env != 'cartpole':
         raise ValueError(f'Unknown environment: {env}')
     return TrainConfig()
@@ -81,6 +84,7 @@ def evaluate(agent, env, seeds, epsilon=0.0):
 
 
 def train(config, output):
+    accumulator = NStepAccumulator(config.n_step, config.gamma)
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     if (output / 'result.json').exists() or (output / 'progress.jsonl').exists():
@@ -117,9 +121,10 @@ def train(config, output):
                     action = info.get('executed_action', action)
                     total += reward
                     steps += 1
-                    replay_buffer.append(FrameNumpy.from_dict(dict(
+                    transition = FrameNumpy.from_dict(dict(
                         obs=obs, next_obs=next_obs, action=action, reward=reward,
-                        done=info.get('terminated', done))))
+                        done=info.get('terminated', done)))
+                    replay_buffer.extend(accumulator.append(transition, episode_end=done))
                     obs = next_obs
                     if (len(replay_buffer) > config.batch_size
                             and steps >= config.learning_starts
@@ -205,9 +210,9 @@ def main():
         if value is not None:
             setattr(config, name, value)
     positive = ('episodes', 'hidden_dim', 'batch_size', 'train_frequency', 'eval_interval',
-                'eval_episodes', 'final_eval_episodes', 'max_episode_steps')
+                'eval_episodes', 'final_eval_episodes', 'max_episode_steps', 'n_step')
     if any(getattr(config, name) < 1 for name in positive):
-        parser.error('episode counts, dimensions, batch size and intervals must be positive')
+        parser.error('episode counts, dimensions, batch size, intervals and n-step must be positive')
     if config.buffer_size <= config.batch_size:
         parser.error('buffer-size must exceed batch-size')
     if not 0 <= config.epsilon_min <= config.epsilon <= 1 or config.lr <= 0:
@@ -220,7 +225,7 @@ def main():
         parser.error('invalid target-update-freq, max-grad-norm or eval-epsilon')
     if config.double_dqn and config.target_update_freq == 0:
         parser.error('double-dqn requires positive target-update-freq')
-    output = args.output or ('results/breakout_optimized' if args.env == 'breakout' else 'results/cartpole_single')
+    output = args.output or (f'results/breakout_{config.n_step}step' if args.env == 'breakout' else 'results/cartpole_single')
     print(json.dumps(train(config, output), indent=2))
     plot_run(output)
 

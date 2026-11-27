@@ -65,6 +65,7 @@ class DQNAgent(Agent):
     def learn(self, samples: SampleBatchNumpy):
         '''
         samples需要包含字段: obs, next_obs, action, reward, done
+        多步样本的 reward 为累计折扣奖励，discount 为 gamma ** 实际步数。
         '''
         samples = samples.to_torch(device = self.device)
         # 计算Q(s, a)
@@ -80,7 +81,10 @@ class DQNAgent(Agent):
             else:
                 max_next_q_value = next_q_values.max(dim=1, keepdim=True)[0]
         # Q函数更新目标
-        q_target = samples.reward + self.gamma * (1 - samples.done) * max_next_q_value
+        # Aggregated replay samples carry gamma ** actual_horizon. Legacy
+        # batches without this field retain the original one-step target.
+        discount = samples.discount if 'discount' in samples.keys() else self.gamma
+        q_target = samples.reward + discount * (1 - samples.done) * max_next_q_value
         loss = F.smooth_l1_loss(q_value, q_target) if self.huber_loss else F.mse_loss(q_value, q_target)
         # 模型更新
         grad_norm = self.model.optimize(loss, self.max_grad_norm)
@@ -97,3 +101,5 @@ class DQNAgent(Agent):
         samples.action = samples.action.reshape((-1, 1)).astype(np.int64)
         samples.reward = samples.reward.reshape((-1, 1)).astype(np.float32)
         samples.done = samples.done.reshape((-1, 1)).astype(np.float32)
+        if 'discount' in samples.keys():
+            samples.discount = samples.discount.reshape((-1, 1)).astype(np.float32)
