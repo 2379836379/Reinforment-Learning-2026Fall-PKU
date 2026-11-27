@@ -1,5 +1,6 @@
 """Numerical checks for target updates, Double DQN and dueling heads."""
 import unittest
+import random
 from unittest.mock import patch
 import tempfile
 
@@ -11,6 +12,7 @@ from dqn_agent import DQNAgent
 from dqn_train import TrainConfig, evaluate, train
 from q_network import QNetwork, BreakoutQNetwork
 from sample import FrameNumpy, SampleBatchNumpy
+from replay_buffer import PrioritizedReplayBuffer, UniformReplayBuffer
 
 
 class TinyQNetwork(QNetwork):
@@ -80,6 +82,58 @@ class DQNTests(unittest.TestCase):
         self.assertAlmostEqual(metrics['loss'], np.mean(targets ** 2), places=6)
         self.assertTrue(all(p.grad is None for p in agent.target_model.parameters()))
 
+    def test_per_weights_scale_per_sample_huber_loss(self):
+        agent = self.make_agent(double_dqn=True, huber_loss=True)
+        batch = SampleBatchNumpy.stack([
+            FrameNumpy.from_dict(dict(obs=np.array([1., 0.], dtype=np.float32),
+                next_obs=np.array([0., 1.], dtype=np.float32), action=0,
+                reward=2.5, done=True, weights=weight))
+            for weight in (1., .25)])
+        agent.sample_process(batch)
+        metrics = agent.learn(batch)
+        self.assertAlmostEqual(metrics['loss'], .5 * (2. + .25 * 2.))
+        np.testing.assert_allclose(metrics['td_errors'], [2.5, 2.5])
+
+    def test_prioritized_replay_probabilities_weights_and_updates(self):
+        replay = PrioritizedReplayBuffer(4, alpha=1., priority_epsilon=1e-6)
+        items = [FrameNumpy.from_dict(dict(obs=np.array([i], dtype=np.uint8),
+                     next_obs=np.array([i + 1], dtype=np.uint8), action=0,
+                     reward=float(i + 1), done=False)) for i in range(4)]
+        for item in items:
+            replay.append(item)
+        self.assertAlmostEqual(replay.tree.sums[1], 4.)
+        replay.update_priorities(range(4), [1., 2., 3., 4.])
+        self.assertAlmostEqual(replay.tree.sums[1], 10.000004)
+        np.random.seed(123)
+        indices = [replay.tree.find_prefixsum(np.random.random() * replay.tree.sums[1])
+                   for _ in range(5000)]
+        counts = np.bincount(indices, minlength=4) / len(indices)
+        np.testing.assert_allclose(counts, [.1, .2, .3, .4], atol=.025)
+        batch, sampled = replay.sample(4, beta=.4)
+        self.assertEqual(len(batch), 4)
+        self.assertEqual(len(sampled), 4)
+        self.assertIn('weights', batch.keys())
+        self.assertTrue(np.all(batch.weights > 0))
+        self.assertTrue(np.all(batch.weights <= 1))
+        self.assertLess(batch.weights.min(), 1.)
+        for priorities in ([-1.], [float('nan')]):
+            with self.assertRaises(ValueError):
+                replay.update_priorities([0], priorities)
+        for alpha in (-.1, 1.1):
+            with self.assertRaises(ValueError):
+                PrioritizedReplayBuffer(4, alpha=alpha)
+
+    def test_uniform_replay_preserves_python_random_sampling(self):
+        replay = UniformReplayBuffer(4)
+        for i in range(4):
+            replay.append(FrameNumpy.from_dict(dict(obs=np.array([i], dtype=np.uint8),
+                next_obs=np.array([i+1], dtype=np.uint8), action=0, reward=0., done=False)))
+        random.seed(12)
+        first, indices = replay.sample(4)
+        self.assertEqual(len(set(indices)), 4)
+        self.assertTrue(np.all(first.weights == 1.))
+        replay.update_priorities(indices, np.arange(4))
+
     def test_huber_and_gradient_clipping(self):
         agent = self.make_agent(double_dqn=True, huber_loss=True, max_grad_norm=.1)
         metrics = agent.learn(self.batch(agent))
@@ -147,23 +201,24 @@ class DQNTests(unittest.TestCase):
                     masks.extend(batch.done.flatten().tolist())
                     rewards.extend(batch.reward.flatten().tolist())
                     discounts.extend(batch.discount.flatten().tolist())
-                    return dict(loss=0., q_mean=0., target_mean=0., grad_norm=None)
+                    return dict(loss=0., q_mean=0., target_mean=0., grad_norm=None,
+                                td_errors=np.ones(len(batch), dtype=np.float32))
                 config = TrainConfig(episodes=1, batch_size=2, buffer_size=4,
                                      eval_episodes=1, final_eval_episodes=1, n_step=n_step)
                 # Include all transitions in the test update to check the final mask.
                 with patch('dqn_train.make_env', side_effect=lambda c: FakeEnv(terminal)), \
-                     patch('dqn_train.random.sample', side_effect=lambda population, k: list(population)), \
+                     patch('dqn_train.random.sample', side_effect=lambda population, k: list(population)[-k:]), \
                      patch.object(DQNAgent, 'learn', learn):
                     result = train(config, output)
                 self.assertEqual(result['env_steps'], 3)
                 if n_step == 1:
-                    self.assertEqual(masks, [0., 0., float(terminal)])
-                    np.testing.assert_allclose(rewards, [1., 1., 1.])
-                    np.testing.assert_allclose(discounts, [.99, .99, .99])
+                    self.assertEqual(masks, [0., float(terminal)])
+                    np.testing.assert_allclose(rewards, [1., 1.])
+                    np.testing.assert_allclose(discounts, [.99, .99])
                 else:
-                    self.assertEqual(masks, [float(terminal)] * 3)
-                    np.testing.assert_allclose(rewards, [2.9701, 1.99, 1.])
-                    np.testing.assert_allclose(discounts, [.99 ** 3, .99 ** 2, .99])
+                    self.assertEqual(masks, [float(terminal)] * 2)
+                    np.testing.assert_allclose(rewards, [1.99, 1.])
+                    np.testing.assert_allclose(discounts, [.99 ** 2, .99])
 
 
 if __name__ == '__main__':

@@ -85,14 +85,19 @@ class DQNAgent(Agent):
         # batches without this field retain the original one-step target.
         discount = samples.discount if 'discount' in samples.keys() else self.gamma
         q_target = samples.reward + discount * (1 - samples.done) * max_next_q_value
-        loss = F.smooth_l1_loss(q_value, q_target) if self.huber_loss else F.mse_loss(q_value, q_target)
+        td_error = q_target - q_value
+        per_sample_loss = (F.smooth_l1_loss(q_value, q_target, reduction='none')
+                           if self.huber_loss else F.mse_loss(q_value, q_target, reduction='none'))
+        weights = samples.weights if 'weights' in samples.keys() else 1.0
+        loss = (per_sample_loss * weights).mean()
         # 模型更新
         grad_norm = self.model.optimize(loss, self.max_grad_norm)
         self.learn_steps += 1
         if self.target_model is not None and self.learn_steps % self.target_update_freq == 0:
             self.target_model.load_state_dict(self.model.state_dict())
         return dict(loss=loss.item(), q_mean=q_value.detach().mean().item(),
-                    target_mean=q_target.mean().item(), grad_norm=grad_norm)
+                    target_mean=q_target.mean().item(), grad_norm=grad_norm,
+                    td_errors=td_error.detach().abs().squeeze(1).cpu().numpy())
     
     def sample_process(self, samples: SampleBatchNumpy):
         '''
@@ -103,3 +108,5 @@ class DQNAgent(Agent):
         samples.done = samples.done.reshape((-1, 1)).astype(np.float32)
         if 'discount' in samples.keys():
             samples.discount = samples.discount.reshape((-1, 1)).astype(np.float32)
+        if 'weights' in samples.keys():
+            samples.weights = samples.weights.reshape((-1, 1)).astype(np.float32)

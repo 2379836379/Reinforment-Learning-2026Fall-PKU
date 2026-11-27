@@ -1,6 +1,5 @@
 """CartPole / Breakout DQN training with recorded evaluations."""
 import argparse
-from collections import deque
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
@@ -15,6 +14,7 @@ from gym_env import GymEnv, BreakoutEnv
 from q_network import QNetwork, BreakoutQNetwork
 from sample import FrameNumpy, SampleBatchNumpy
 from n_step import NStepAccumulator
+from replay_buffer import PrioritizedReplayBuffer, UniformReplayBuffer
 
 
 @dataclass
@@ -45,6 +45,11 @@ class TrainConfig:
     max_grad_norm: float = 0.0
     eval_epsilon: float = 0.0
     n_step: int = 1
+    prioritized_replay: bool = False
+    per_alpha: float = 0.6
+    per_beta_start: float = 0.4
+    per_beta_steps: int = 1_000_000
+    per_priority_epsilon: float = 1e-6
 
 
 def default_config(env):
@@ -101,7 +106,9 @@ def train(config, output):
     else:
         model = QNetwork(env.state_dim[0], env.action_dim, config.lr, config.hidden_dim)
     agent.set_model(model)
-    replay_buffer = deque(maxlen=config.buffer_size)
+    replay_buffer = (PrioritizedReplayBuffer(config.buffer_size, config.per_alpha,
+                                             config.per_priority_epsilon)
+                     if config.prioritized_replay else UniformReplayBuffer(config.buffer_size))
     train_returns, eval_returns, eval_at = [], [], []
     steps = updates = 0
     diagnostics = []
@@ -129,9 +136,13 @@ def train(config, output):
                     if (len(replay_buffer) > config.batch_size
                             and steps >= config.learning_starts
                             and steps % config.train_frequency == 0):
-                        batch = SampleBatchNumpy.stack(random.sample(replay_buffer, config.batch_size))
+                        beta_fraction = min(updates / max(config.per_beta_steps, 1), 1.0)
+                        beta = config.per_beta_start + beta_fraction * (1.0 - config.per_beta_start)
+                        batch, indices = replay_buffer.sample(config.batch_size, beta)
                         agent.sample_process(batch)
-                        diagnostics.append(agent.learn(batch))
+                        metrics = agent.learn(batch)
+                        replay_buffer.update_priorities(indices, metrics.pop('td_errors'))
+                        diagnostics.append(metrics)
                         updates += 1
                     if config.epsilon_decay_steps:
                         fraction = min(steps / config.epsilon_decay_steps, 1.0)
@@ -221,6 +232,9 @@ def main():
         parser.error('gamma must be in [0, 1] and epsilon-decay in (0, 1]')
     if config.learning_starts < 0 or config.epsilon_decay_steps < 0:
         parser.error('learning-starts and epsilon-decay-steps must be nonnegative')
+    if (not 0 <= config.per_alpha <= 1 or not 0 <= config.per_beta_start <= 1
+            or config.per_beta_steps < 1 or config.per_priority_epsilon <= 0):
+        parser.error('invalid PER alpha, beta-start, beta-steps or priority-epsilon')
     if config.target_update_freq < 0 or config.max_grad_norm < 0 or not 0 <= config.eval_epsilon <= 1:
         parser.error('invalid target-update-freq, max-grad-norm or eval-epsilon')
     if config.double_dqn and config.target_update_freq == 0:
